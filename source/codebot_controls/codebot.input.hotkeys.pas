@@ -37,7 +37,7 @@ type
     function GetCount: Integer;
   protected
     function FindHotkey(Key: Word; ShiftState: TShiftState): Integer;
-    procedure DoRegister(Key: Word; ShiftState: TShiftState); virtual; abstract;
+    function DoRegister(Key: Word; ShiftState: TShiftState): Boolean; virtual; abstract;
     procedure DoUnregister(Key: Word; ShiftState: TShiftState); virtual; abstract;
     property Notifiers[Index: Integer]: THotkeyNotify read GetNotifier; default;
     property Count: Integer read GetCount;
@@ -79,7 +79,7 @@ type
     FRoot: PGdkWindow;
     FDisplay: PDisplay;
   protected
-    procedure DoRegister(Key: Word; ShiftState: TShiftState); override;
+    function DoRegister(Key: Word; ShiftState: TShiftState): Boolean; override;
     procedure DoUnregister(Key: Word; ShiftState: TShiftState); override;
   public
     constructor Create;
@@ -362,10 +362,12 @@ begin
   FDisplay := GDK_WINDOW_XDISPLAY(FRoot);
 end;
 
-procedure TGtk2X11HotkeyCapture.DoRegister(Key: Word; ShiftState: TShiftState);
+function TGtk2X11HotkeyCapture.DoRegister(Key: Word; ShiftState: TShiftState): Boolean;
 
-  procedure CaptureKey(Display: PDisplay; KeyCode: LongWord; Modifier: LongWord; Window: TWindow);
+  function CaptureKey(Display: PDisplay; KeyCode: LongWord; Modifier: LongWord; Window: TWindow): Boolean;
   begin
+    gdk_error_trap_push;
+
     { Capture keys without cap or num lock }
     XGrabKey(Display, KeyCode, Modifier and NotLock, Window, 1, GrabModeAsync, GrabModeAsync);
     { Capture keys with cap lock }
@@ -374,6 +376,9 @@ procedure TGtk2X11HotkeyCapture.DoRegister(Key: Word; ShiftState: TShiftState);
     XGrabKey(Display, KeyCode, Modifier or NumLock, Window, 1, GrabModeAsync, GrabModeAsync);
     { Capture keys with cap or num lock }
     XGrabKey(Display, KeyCode, Modifier or CapLock or NumLock, Window, 1, GrabModeAsync, GrabModeAsync);
+
+    gdk_flush;
+    Result := gdk_error_trap_pop() = 0;
   end;
 
 var
@@ -386,12 +391,12 @@ begin
   KeySym := KeyToSym(Key);
   KeyCode := XKeysymToKeycode(FDisplay, KeySym);
   Window := gdk_x11_drawable_get_xid(FRoot);
-  CaptureKey(FDisplay, KeyCode, Modifier, Window);
+  Result := CaptureKey(FDisplay, KeyCode, Modifier, Window);
   ShiftSym := XKeycodeToKeysym(FDisplay, KeyCode, 1);
   if KeySym <> ShiftSym then
   begin
     KeyCode := XKeysymToKeycode(FDisplay, ShiftSym);
-    CaptureKey(FDisplay, KeyCode, Modifier, Window);
+    Result := CaptureKey(FDisplay, KeyCode, Modifier, Window);
   end;
   if Count = 0 then
     gdk_window_add_filter(FRoot, @FilterKeys, Self)
@@ -585,12 +590,15 @@ begin
   Result := I < 0;
   if Result then
   begin
-    DoRegister(Key, ShiftState);
+    Result := DoRegister(Key, ShiftState);
     { Add items to the list of registered hotkeys after DoRegister }
-    H.Key := Key;
-    H.ShiftState := ShiftState;
-    H.Notify := Notify;
-    FList.Push(H);
+    if Result then
+    begin
+      H.Key := Key;
+      H.ShiftState := ShiftState;
+      H.Notify := Notify;
+      FList.Push(H);
+    end;
   end;
 end;
 
